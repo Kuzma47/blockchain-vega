@@ -36,7 +36,7 @@ class MerkleTree:
     def __init__(self, transactions: List[Transaction]):
         self._transactions: List[Transaction] = transactions
         self._leaves: List[MerkleNode] = [MerkleNode(None, None, MerkleTree.sha256(tx.json()), str(tx.id)) for tx in self._transactions]
-        # print([(node.tid, node.hash_value) for node in self._leaves])
+        print([(node.tid, node.hash_value) for node in self._leaves])
         self._root: Optional[MerkleNode] = self._build_merkle_tree()
 
     @staticmethod
@@ -72,48 +72,68 @@ class MerkleTree:
     def get_merkle_root(self) -> Optional[str]:
         return self.root.hash_value if self.root else None
 
-    def get_merkle_proof(self, tx: Transaction):
-        target_hash = MerkleTree.sha256(tx.json())
 
-        def find_path(node: MerkleNode, current_path):
-            if not node.left and not node.right:
-                if node.hash_value == target_hash:
-                    return current_path
-                else:
-                    return None
+def get_merkle_proof(tree: MerkleTree, tx: Transaction) -> Optional[List[Tuple[str, bool]]]:
+    """Возвращает Merkle Proof для данной транзакции. Формат: список кортежей (хеш, слева ли узел)."""
+    # Найдём лист (узел) с соответствующим хешем транзакции
+    target_hash = tree.sha256(tx.json())
 
-            if node.left:
-                left_path = find_path(node.left, current_path + [(node.right.hash_value, node.right.tid) if node.right else ''])
-                if left_path:
-                    return left_path
+    # Функция для поиска нужного узла и построения пути
+    def find_path(node: MerkleNode, current_path: List[Tuple[str, bool]]) -> Optional[List[Tuple[str, bool]]]:
+        if not node.left and not node.right:  # Это лист
+            if node.hash_value == target_hash:
+                return current_path
+            else:
+                return None
 
-            if node.right:
-                right_path = find_path(node.right, current_path + [(node.left.hash_value, node.left.tid) if node.left else ''])
-                if right_path:
-                    return right_path
+        # Поиск в левом поддереве
+        if node.left:
+            left_path = find_path(node.left, current_path + [(node.right.hash_value if node.right else '', False)])
+            if left_path:
+                return left_path
 
-            return None
+        # Поиск в правом поддереве
+        if node.right:
+            right_path = find_path(node.right, current_path + [(node.left.hash_value if node.left else '', True)])
+            if right_path:
+                return right_path
 
-        return find_path(self.root, [])
+        return None
+
+    # Запускаем поиск пути от корня
+    return find_path(tree.root, [])
 
 
-def get_proof(tree: MerkleTree, transaction: Transaction):
-    print(f'Proof for transaction {transaction.id}')
-    for proof in tree.get_merkle_proof(transaction):
-        print(f'\th({proof[1]}): {proof[0]}')
+import hashlib
+
+from copy import deepcopy
+from typing import List, Tuple, Optional
+
+
+def calculate_sha256(data: str):
+    return hashlib.sha256(data.encode('utf-8')).hexdigest()
+
+def hash_proof(proof: Tuple[str, List[str]]):
+    next_hash, proof = proof
+    total_hash = next_hash
+    # concatenate all hashes
+    for hash_value in sorted(proof):
+        total_hash += hash_value
+    return calculate_sha256(total_hash)
+
+def is_valid(tree: MerkleTree, current_hash: str, proof: List[Tuple[str, bool]]) -> bool:
+    for sibling_hash, is_left_sibling in proof[::-1]:
+        if is_left_sibling:
+            current_hash = MerkleTree.hash_pair(sibling_hash, current_hash)
+        else:
+            current_hash = MerkleTree.hash_pair(current_hash, sibling_hash)
+    return current_hash == tree.get_merkle_root()
 
 
 if __name__ == '__main__':
-    tx1 = Transaction(1, 1.0, "Payment A")
-    tx2 = Transaction(2, 20.0, "Payment B")
-    tx3 = Transaction(3, 30.0, "Payment C")
-    tx4 = Transaction(4, 40.0, "Payment D")
-    tx5 = Transaction(5, 50.0, "Payment E")
-    tx6 = Transaction(6, 60.0, "Payment F")
-    tx7 = Transaction(7, 70.0, "Payment G")
-    tx8 = Transaction(8, 80.0, "Payment H")
-
-    transactions = [tx1, tx2, tx3, tx4, tx5, tx6, tx7, tx8]
-    merkle_tree = MerkleTree(transactions)
-
-    get_proof(merkle_tree, tx1)
+    test_transactions = [Transaction(i, 100*i, f"Payment {i}") for i in range(4)]
+    merkle_tree = MerkleTree(test_transactions)
+    print(f'Root: {merkle_tree.get_merkle_root()}')
+    ts = test_transactions[0]
+    proof = get_merkle_proof(merkle_tree, ts)
+    print(is_valid(merkle_tree, MerkleTree.sha256(ts.json()), proof))
